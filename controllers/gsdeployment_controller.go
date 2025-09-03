@@ -32,6 +32,9 @@ type GSDeploymentReconciler struct {
 }
 
 func (r *GSDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := ctrl.Log.WithName("gsdeployment").WithValues("name", req.NamespacedName)
+	log.Info("reconciling")
+
 	var gsd gamev1alpha1.GSDeployment
 	if err := r.Get(ctx, req.NamespacedName, &gsd); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)

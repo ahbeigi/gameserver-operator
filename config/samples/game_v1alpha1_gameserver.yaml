@@ -1,9 +1,22 @@
+# gs.yaml
 apiVersion: game.example.com/v1alpha1
 kind: GameServer
 metadata:
-  labels:
-    app.kubernetes.io/name: gameserver-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: gameserver-sample
+  name: gs-test
+  namespace: games
 spec:
-  # TODO(user): Add fields here
+  image: kyon/gameserver:latest
+  port: 30001
+  pollPath: /status
+
+
+
+# apiVersion: game.example.com/v1alpha1
+# kind: GameServer
+# metadata:
+#   labels:
+#     app.kubernetes.io/name: gameserver-operator
+#     app.kubernetes.io/managed-by: kustomize
+#   name: gameserver-sample
+# spec:
+#   # TODO(user): Add fields here

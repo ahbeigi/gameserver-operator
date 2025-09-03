@@ -1,9 +1,55 @@
+# (Optional) Create a separate workload namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: games
+---
 apiVersion: game.example.com/v1alpha1
 kind: GSDeployment
 metadata:
-  labels:
-    app.kubernetes.io/name: gameserver-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: gsdeployment-sample
+  name: fleet-a
+  namespace: gameserver-operator-system           # change to "default" if you prefer
 spec:
-  # TODO(user): Add fields here
+  image: kyon/gameserver:latest
+  pollPath: /status
+
+  # fleet size bounds
+  minReplicas: 1
+  maxReplicas: 5
+
+  # autoscaling rules
+  scaleUpThresholdPercent: 80     # add a server when ANY reaches >=80% utilization
+  scaleDownZeroSeconds: 60        # delete servers idle (0 players) for >60s
+
+  # cluster-wide host ports to allocate (hostNetwork=true)
+  portRange:
+    start: 30000
+    end: 30010
+
+  # (optional) scheduling & resources
+  # nodeSelector:
+  #   kubernetes.io/os: linux
+  # resources:
+  #   requests:
+  #     cpu: "100m"
+  #     memory: "64Mi"
+  #   limits:
+  #     cpu: "500m"
+  #     memory: "256Mi"
+
+  # (optional) extra env for the game server
+  # env:
+  #   - name: LOG_LEVEL
+  #     value: info
+
+
+### Original
+# apiVersion: game.example.com/v1alpha1
+# kind: GSDeployment
+# metadata:
+#   labels:
+#     app.kubernetes.io/name: gameserver-operator
+#     app.kubernetes.io/managed-by: kustomize
+#   name: gsdeployment-sample
+# spec:
+#   # TODO(user): Add fields here

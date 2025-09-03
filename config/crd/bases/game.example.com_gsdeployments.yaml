@@ -11,6 +11,8 @@ spec:
     kind: GSDeployment
     listKind: GSDeploymentList
     plural: gsdeployments
+    shortNames:
+    - gsd
     singular: gsdeployment
   scope: Namespaced
   versions:

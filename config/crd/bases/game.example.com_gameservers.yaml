@@ -11,6 +11,8 @@ spec:
     kind: GameServer
     listKind: GameServerList
     plural: gameservers
+    shortNames:
+    - gs
     singular: gameserver
   scope: Namespaced
   versions:
