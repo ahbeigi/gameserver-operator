@@ -1,11 +1,35 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/name: gameserver-operator
-    app.kubernetes.io/managed-by: kustomize
   name: manager-role
 rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - game.example.com
+  resources:
+  - gameservers
+  - gsdeployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - game.example.com
+  resources:
+  - gameservers/finalizers
+  - gsdeployments/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - game.example.com
+  resources:
+  - gameservers/status
+  - gsdeployments/status
+  verbs:
+  - get
+  - patch
+  - update
