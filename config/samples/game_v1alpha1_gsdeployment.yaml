@@ -1,55 +1,29 @@
-# (Optional) Create a separate workload namespace
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: games
----
 apiVersion: game.example.com/v1alpha1
 kind: GSDeployment
 metadata:
   name: fleet-a
-  namespace: gameserver-operator-system           # change to "default" if you prefer
+  namespace: games
 spec:
   image: kyon/gameserver:latest
   pollPath: /status
 
-  # fleet size bounds
+  # fleet bounds
   minReplicas: 1
   maxReplicas: 5
 
   # autoscaling rules
-  scaleUpThresholdPercent: 80     # add a server when ANY reaches >=80% utilization
-  scaleDownZeroSeconds: 60        # delete servers idle (0 players) for >60s
+  scaleUpThresholdPercent: 80
+  scaleDownZeroSeconds: 60
 
-  # cluster-wide host ports to allocate (hostNetwork=true)
+  # host ports to allocate (because hostNetwork=true in the Pod)
   portRange:
     start: 30000
     end: 30010
 
-  # (optional) scheduling & resources
-  # nodeSelector:
-  #   kubernetes.io/os: linux
+  # nodeSelector: { kubernetes.io/os: linux }
   # resources:
-  #   requests:
-  #     cpu: "100m"
-  #     memory: "64Mi"
-  #   limits:
-  #     cpu: "500m"
-  #     memory: "256Mi"
-
-  # (optional) extra env for the game server
-  # env:
-  #   - name: LOG_LEVEL
-  #     value: info
-
-
-### Original
-# apiVersion: game.example.com/v1alpha1
-# kind: GSDeployment
-# metadata:
-#   labels:
-#     app.kubernetes.io/name: gameserver-operator
-#     app.kubernetes.io/managed-by: kustomize
-#   name: gsdeployment-sample
-# spec:
-#   # TODO(user): Add fields here
+  #   requests: { cpu: "100m", memory: "64Mi" }
+  #   limits:   { cpu: "500m", memory: "256Mi" }
+  env:
+    - name: LOG_LEVEL
+      value: debug
