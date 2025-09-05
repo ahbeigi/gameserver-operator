@@ -5,7 +5,7 @@ import (
 	"os"
 
 	gamev1alpha1 "github.com/ahbeigi/gameserver-operator/api/v1alpha1"
-	"github.com/ahbeigi/gameserver-operator/controllers"
+	"github.com/ahbeigi/gameserver-operator/internal/controller"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -55,14 +55,14 @@ func main() {
 	}
 
 	// REGISTER BOTH CONTROLLERS HERE
-	if err = (&controllers.GameServerReconciler{
+	if err = (&controller.GameServerReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GameServer")
 		os.Exit(1)
 	}
-	if err = (&controllers.GSDeploymentReconciler{
+	if err = (&controller.GSDeploymentReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

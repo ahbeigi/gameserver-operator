@@ -102,19 +102,29 @@ kubectl run imgcheck --restart=Never --image=gameserver-operator:dev -- sleep 60
 ```yaml
 apiVersion: game.example.com/v1alpha1
 kind: GSDeployment
-metadata: { name: fleet-a, namespace: games }
+metadata:
+  name: shooter-fleet
+  namespace: games
 spec:
   image: kyon/gameserver:latest
   pollPath: /status
-  minReplicas: 1
+  portRange: { start: 30000, end: 30005 }
+  minReplicas: 2
   maxReplicas: 5
   scaleUpThresholdPercent: 80
   scaleDownZeroSeconds: 60
-  portRange: { start: 30000, end: 30010 }
+  updateStrategy:
+    type: NoDisruption
+    drainTimeoutSeconds: 7200
+    maxSurge: 2
+    maxUnavailable: 0
+  parameters:
+    maxPlayers: 32
 ```
-```bash
+Run:
+```
 kubectl create ns games
-kubectl -n games apply -f gsd.yaml
+kubectl apply -f gsd.yaml
 watch -n1 'kubectl -n games get gsd,gs,pods -o wide'
 ```
 

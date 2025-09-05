@@ -1,63 +1,209 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
 	"context"
-
-	"k8s.io/apimachinery/pkg/runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
 
 	gamev1alpha1 "github.com/ahbeigi/gameserver-operator/api/v1alpha1"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime" // << add this
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// GameServerReconciler reconciles a GameServer object
+//+kubebuilder:rbac:groups=game.example.com,resources=gameservers,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=game.example.com,resources=gameservers/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=game.example.com,resources=gameservers/finalizers,verbs=update
+//+kubebuilder:rbac:groups="",resources=pods;events,verbs=get;list;watch;create;update;patch;delete
+
 type GameServerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	httpc  *http.Client
 }
 
-// +kubebuilder:rbac:groups=game.example.com,resources=gameservers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=game.example.com,resources=gameservers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=game.example.com,resources=gameservers/finalizers,verbs=update
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the GameServer object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := ctrllog.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var gs gamev1alpha1.GameServer
+	if err := r.Get(ctx, req.NamespacedName, &gs); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	return ctrl.Result{}, nil
+	// 1) Ensure Pod exists (1:1)
+	var pod corev1.Pod
+	err := r.Get(ctx, types.NamespacedName{Name: gs.Name, Namespace: gs.Namespace}, &pod)
+	if kerrors.IsNotFound(err) {
+		pollPath := gs.Spec.PollPath
+		if pollPath == "" {
+			pollPath = "/status"
+		}
+		pod = corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      gs.Name,
+				Namespace: gs.Namespace,
+				Labels:    map[string]string{"app": gs.Name, "game.example.com/owner": gs.Name},
+			},
+			Spec: corev1.PodSpec{
+				HostNetwork:  true,
+				DNSPolicy:    corev1.DNSClusterFirstWithHostNet,
+				NodeSelector: gs.Spec.NodeSelector,
+				Containers: []corev1.Container{{
+					Name:  "server",
+					Image: defaultIfEmpty(gs.Spec.Image, "kyon/gameserver:latest"),
+					Env: append(gs.Spec.Env, corev1.EnvVar{
+						Name:  "GAME_PORT",
+						Value: fmt.Sprint(gs.Spec.Port),
+					}),
+					Ports:     []corev1.ContainerPort{{ContainerPort: gs.Spec.Port}},
+					Resources: gs.Spec.Resources,
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							HTTPGet: &corev1.HTTPGetAction{
+								Path: pollPath,
+								Port: intstr.FromInt(int(gs.Spec.Port)),
+							},
+						},
+						InitialDelaySeconds: 2,
+						PeriodSeconds:       5,
+						TimeoutSeconds:      2,
+					},
+				}},
+				RestartPolicy: corev1.RestartPolicyAlways,
+			},
+		}
+		_ = ctrl.SetControllerReference(&gs, &pod, r.Scheme)
+		if err := r.Create(ctx, &pod); err != nil {
+			log.Error(err, "creating Pod")
+			return ctrl.Result{}, err
+		}
+	} else if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// 2) Phase from Pod
+	phase := "Pending"
+	switch pod.Status.Phase {
+	case corev1.PodRunning:
+		phase = "Running"
+	case corev1.PodFailed:
+		phase = "Error"
+	case corev1.PodSucceeded:
+		phase = "Terminating"
+	case corev1.PodPending:
+		phase = "Pending"
+	}
+
+	// 3) Poll /status if Running
+	now := metav1.Now()
+	reach := metav1.Condition{
+		Type:               "Reachable",
+		Status:             metav1.ConditionFalse,
+		Reason:             "NotReady",
+		LastTransitionTime: now,
+		ObservedGeneration: gs.Generation,
+	}
+	if pod.Status.Phase == corev1.PodRunning && pod.Status.HostIP != "" {
+		pollPath := defaultIfEmpty(gs.Spec.PollPath, "/status")
+		endpoint := fmt.Sprintf("http://%s:%d%s", pod.Status.HostIP, gs.Spec.Port, pollPath)
+		if r.httpc == nil {
+			r.httpc = &http.Client{Timeout: 2 * time.Second}
+		}
+
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+		resp, err := r.httpc.Do(req)
+		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			var body struct {
+				Players    int32 `json:"players"`
+				MaxPlayers int32 `json:"maxPlayers"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&body) == nil {
+				old := gs.DeepCopy()
+				gs.Status.Endpoint = endpoint
+				gs.Status.LastPolled = &now
+				gs.Status.Players = body.Players
+				gs.Status.MaxPlayers = body.MaxPlayers
+				gs.Status.NodeName = pod.Spec.NodeName
+				gs.Status.Phase = phase
+				if body.Players == 0 {
+					if gs.Status.ZeroSince == nil {
+						gs.Status.ZeroSince = &now
+					}
+				} else {
+					gs.Status.ZeroSince = nil
+				}
+				reach.Status = metav1.ConditionTrue
+				reach.Reason = "OK"
+				reach.Message = "Status polled"
+				setOrUpdateCondition(&gs.Status.Conditions, reach)
+				if !equality.Semantic.DeepEqual(old.Status, gs.Status) {
+					if err := r.Status().Update(ctx, &gs); err != nil {
+						return ctrl.Result{}, err
+					}
+				}
+			}
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
+		} else {
+			gs.Status.Phase = "Unreachable"
+			reach.Status = metav1.ConditionFalse
+			reach.Reason = "ConnectionError"
+			if err != nil {
+				reach.Message = err.Error()
+			} else {
+				reach.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			}
+			setOrUpdateCondition(&gs.Status.Conditions, reach)
+			gs.Status.LastPolled = &now
+			_ = r.Status().Update(ctx, &gs)
+		}
+	} else {
+		gs.Status.Phase = phase
+		_ = r.Status().Update(ctx, &gs)
+	}
+
+	// Requeue to poll every 10s
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
 func (r *GameServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gamev1alpha1.GameServer{}).
-		Named("gameserver").
+		Owns(&corev1.Pod{}).
 		Complete(r)
+}
+
+func setOrUpdateCondition(conds *[]metav1.Condition, c metav1.Condition) {
+	found := false
+	for i := range *conds {
+		if (*conds)[i].Type == c.Type {
+			(*conds)[i] = c
+			found = true
+			break
+		}
+	}
+	if !found {
+		*conds = append(*conds, c)
+	}
+}
+
+func defaultIfEmpty(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

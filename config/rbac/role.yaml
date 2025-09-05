@@ -21,7 +21,6 @@ rules:
   - game.example.com
   resources:
   - gameservers
-  - gsdeployments
   verbs:
   - create
   - delete
@@ -46,3 +45,13 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - game.example.com
+  resources:
+  - gsdeployments
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
