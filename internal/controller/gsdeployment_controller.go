@@ -39,6 +39,7 @@ func (r *GSDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	log := ctrl.Log.WithName("gsdeployment").WithValues("name", req.NamespacedName)
 	log.Info("reconciling")
 
+	// Fetch parent GSDeployment
 	var gsd gamev1alpha1.GSDeployment
 	if err := r.Get(ctx, req.NamespacedName, &gsd); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -57,7 +58,7 @@ func (r *GSDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if gsd.Spec.Image == "" {
 		gsd.Spec.Image = "kyon/gameserver:latest"
 	}
-	// Simple UpdateStrategy defaults (PoC)
+	// Simple UpdateStrategy defaults
 	if gsd.Spec.UpdateStrategy.Type == "" {
 		gsd.Spec.UpdateStrategy.Type = "NoDisruption"
 	}
@@ -93,7 +94,7 @@ func (r *GSDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	// Classify by whether they match desired image + MAX_PLAYERS
+	// Classify children: "desired" (matches image + MAX_PLAYERS) vs "outdated".
 	var outdated []gamev1alpha1.GameServer
 	var desiredOnes []gamev1alpha1.GameServer
 	for _, gs := range children.Items {
@@ -119,9 +120,9 @@ func (r *GSDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	// Simple surge: if we have outdated servers, create up to MaxSurge new desired ones
+	// Surge: if we have outdated servers, create up to MaxSurge new desired ones
 	total := int32(len(children.Items))
-	surgeLimit := gsd.Spec.MinReplicas + gsd.Spec.UpdateStrategy.MaxSurge
+	surgeLimit := total + gsd.Spec.UpdateStrategy.MaxSurge
 	for (len(outdated) > 0) && (total < surgeLimit) && (total < gsd.Spec.MaxReplicas) {
 		port, ok := allocatePort(used, gsd.Spec.PortRange.Start, gsd.Spec.PortRange.End)
 		if !ok {
@@ -157,10 +158,8 @@ func (r *GSDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Ensure minReplicas
 	desired := maxInt32(gsd.Spec.MinReplicas, 0)
-	// Current replicas
 	cur := int32(len(children.Items))
 
-	// Create missing (use desired env incl. MAX_PLAYERS)
 	for cur < desired {
 		port, ok := allocatePort(used, gsd.Spec.PortRange.Start, gsd.Spec.PortRange.End)
 		if !ok {
