@@ -1,135 +1,217 @@
-# gameserver-operator
-// TODO(user): Add simple overview of use/purpose
+# GameServer Operator — Quick Runbook (Win11 + WSL2 + Kubebuilder)
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+> For more details see [DESIGN-SUMMAR.md](docs/DESIGN-SUMMARY.md) and [MECHANICS.md](docs/MECHANICS.md).
 
-## Getting Started
-
-### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
-
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
-
-```sh
-make docker-build docker-push IMG=<some-registry>/gameserver-operator:tag
+## 0) Dev setup (Windows 11, VS Code, WSL2)
+- Install WSL2 (Ubuntu) and Docker Desktop → enable **WSL 2 based engine** and **WSL Integration** for Ubuntu.
+- In WSL:
+```bash
+sudo apt update && sudo apt install -y make curl git ca-certificates
+# Go
+wget https://go.dev/dl/go1.22.5.linux-amd64.tar.gz && sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
+echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.profile && source ~/.profile
+# kubectl + kind
+curl -Lo kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64 && chmod +x kind && sudo mv kind /usr/local/bin/
+curl -Lo kubectl https://dl.k8s.io/release/v1.30.4/bin/linux/amd64/kubectl && chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+# kubebuilder
+curl -L https://go.kubebuilder.io/dl/latest/linux/amd64 | tar -xz -C /tmp && sudo mv /tmp/kubebuilder_*_linux_amd64 /usr/local/kubebuilder
+echo 'export PATH=/usr/local/kubebuilder/bin:$PATH' >> ~/.profile && source ~/.profile
+```
+- Fix Docker-in-WSL if needed:
+```bash
+SOCK_GROUP=$(stat -c '%G' /var/run/docker.sock); [ "$SOCK_GROUP" = "UNKNOWN" ] && \
+  sudo groupadd -g $(stat -c '%g' /var/run/docker.sock) docker || true; \
+  sudo usermod -aG docker $USER && newgrp docker
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
-
-```sh
+## 1) Initialize project & CRDs
+```bash
+mkdir gameserver-operator && cd $_
+git init
+go mod init github.com/<you>/gameserver-operator
+kubebuilder init --domain=example.com --repo=github.com/<you>/gameserver-operator
+kubebuilder create api --group=game --version=v1alpha1 --kind=GameServer --resource --controller
+kubebuilder create api --group=game --version=v1alpha1 --kind=GSDeployment --resource --controller
+```
+**API package tips**
+- `api/v1alpha1/doc.go`:
+```go
+// +kubebuilder:object:generate=true
+// +groupName=game.example.com
+package v1alpha1
+```
+- `groupversion_info.go` registers GameServer, GameServerList, GSDeployment, GSDeploymentList.
+- Short names:
+```go
+//+kubebuilder:resource:shortName=gs   // GameServer
+//+kubebuilder:resource:shortName=gsd  // GSDeployment
+```
+**Generate & install CRDs to current cluster**
+```bash
+make generate
+make manifests
 make install
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+## 2) Controllers (design recap)
+- **GameServer controller**
+  - Ensures one Pod (hostNetwork: true) per GameServer; injects `GAME_PORT` from `spec.port`; readiness probe `/status`.
+  - Every 10s polls `http://<hostIP>:<port>/status`; updates `.status.players/.maxPlayers/.phase/.zeroSince` + `Reachable` condition.
+- **GSDeployment controller**
+  - Ensures `minReplicas`; allocates unique ports from `[30000, 32000]` (configurable).
+  - Scale up when **any** GS ≥ threshold (default 80%); add one up to `maxReplicas`.
+  - Scale down GS idle (`players==0`) for > N sec (default 60), not below `minReplicas`.
+  - Reacts to GameServer **status** updates (event-driven).
 
-```sh
-make deploy IMG=<some-registry>/gameserver-operator:tag
+**Manager wiring (controller-runtime ≥ v0.15)**
+```go
+import (
+  "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+  "sigs.k8s.io/controller-runtime/pkg/healthz"
+)
+
+mgr, _ := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+  Scheme: scheme,
+  Metrics: server.Options{ BindAddress: ":8080" },
+  HealthProbeBindAddress: ":8081", // or: Health: healthz.Options{BindAddress: ":8081"}
+  LeaderElection: true,
+  LeaderElectionID: "gameserver-operator.game.example.com",
+})
+
+utilruntime.Must(gamev1alpha1.AddToScheme(scheme))
+(&controllers.GameServerReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)
+(&controllers.GSDeploymentReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
-kubectl apply -k config/samples/
+## 3) Build & install on kind
+```bash
+kind create cluster
+make install                           # CRDs
+make docker-build IMG=gameserver-operator:dev
+kind load docker-image gameserver-operator:dev
+make deploy IMG=gameserver-operator:dev
+kubectl -n gameserver-operator-system get deploy,pods
+```
+**Verify image in kind**
+```bash
+docker exec kind-control-plane crictl images | grep gameserver-operator
+# or:
+kubectl run imgcheck --restart=Never --image=gameserver-operator:dev -- sleep 60
+```
+**Sample GSDeployment (namespace `games`)**
+```yaml
+apiVersion: game.example.com/v1alpha1
+kind: GSDeployment
+metadata: { name: fleet-a, namespace: games }
+spec:
+  image: kyon/gameserver:latest
+  pollPath: /status
+  minReplicas: 1
+  maxReplicas: 5
+  scaleUpThresholdPercent: 80
+  scaleDownZeroSeconds: 60
+  portRange: { start: 30000, end: 30010 }
+```
+```bash
+kubectl create ns games
+kubectl -n games apply -f gsd.yaml
+watch -n1 'kubectl -n games get gsd,gs,pods -o wide'
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+## 4) Build, install & deploy on EKS
+**Point kubectl to EKS**
+```bash
+aws eks update-kubeconfig --region <REGION> --name <CLUSTER>
+```
+**Install CRDs**
+```bash
+make manifests && make install
+kubectl get crd | grep game.example.com
+```
+**Build & push operator image to ECR**
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=<REGION>
+REPO=gameserver-operator
+ECR_URI=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:eks
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
+aws ecr create-repository --repository-name $REPO --region $REGION 2>/dev/null || true
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
+docker build -t $ECR_URI .
+docker push $ECR_URI
+```
+**Deploy operator**
+```bash
+make deploy IMG=$ECR_URI
+kubectl -n gameserver-operator-system get deploy,pods
+```
+**Deploy GSDeployment**
+```bash
+kubectl apply -f gsd.yaml
+watch -n1 'kubectl -n games get gsd,gs,pods -o wide'
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
+## 5) Debugging & logs
+**Verbose logs**
+```bash
+NS=gameserver-operator-system
+kubectl -n $NS patch deploy/gameserver-operator-controller-manager --type='json' \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--zap-log-level=debug"}]'
+kubectl -n $NS logs deploy/gameserver-operator-controller-manager -c manager --since=10m --timestamps
+```
+**Events**
+```bash
+kubectl -n $NS get events --sort-by=.lastTimestamp | tail -n 50
+```
+**RBAC checks**
+```bash
+SA=$(kubectl -n $NS get deploy/gameserver-operator-controller-manager -o jsonpath='{.spec.template.spec.serviceAccountName}')
+kubectl auth can-i create pods -n <workload-ns> --as=system:serviceaccount:$NS:$SA
+kubectl auth can-i update gameservers/status --group game.example.com -n <workload-ns> --as=system:serviceaccount:$NS:$SA
+```
+**Run locally**
+```bash
+make run   # runs manager against current kubeconfig
 ```
 
-**UnDeploy the controller from the cluster:**
+## 6) Common pitfalls (and fixes)
+- Docker not available in WSL → Enable Docker Desktop WSL Integration; `wsl --shutdown`; add user to `docker` group.
+- Permission denied /var/run/docker.sock → `usermod -aG docker $USER && newgrp docker`.
+- kind image not found → `kind load docker-image <img>`; ensure `imagePullPolicy: IfNotPresent`.
+- `MetricsBindAddress` compile error → use `Metrics: server.Options{BindAddress: ":8080"}` (and possibly `Health: healthz.Options{...}`).
+- Module path mismatch in Docker build → `go.mod` `module github.com/<you>/gameserver-operator`; imports must match; Dockerfile must copy `api/`, `internal/`, `cmd/`; check `.dockerignore`.
+- Deepcopy not generated → all API files `package v1alpha1`; `doc.go` markers; `groupversion_info.go` registers all kinds; `make generate` (temporary: manual DeepCopy methods file).
+- “no kind registered in scheme” → add `utilruntime.Must(v1alpha1.AddToScheme(scheme))` in main.
+- Controller not reconciling → ensure `cmd/main.go` registers BOTH reconcilers via `SetupWithManager`; ensure Dockerfile builds `cmd/main.go` and copies `internal/`.
+- RBAC → add kubebuilder RBAC markers to allow pods/events create/update and CRD verbs; `make manifests && make install`; verify with `kubectl auth can-i ... --as system:serviceaccount:<ns>:<sa>`.
+- Namespace policy (PSA) → if enforced, `hostNetwork: true` may require privileged namespace.
+- Logs & events → `--zap-log-level=debug`; inspect operator logs and workload namespace events.
+- Image drift → rebuild, `kind load docker-image`, `kubectl set image` and rollout restart.
 
-```sh
-make undeploy
+## 7) Manual test pod (sanity)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gs-manual, namespace: games }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gs-manual } }
+  template:
+    metadata: { labels: { app: gs-manual } }
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: server
+        image: kyon/gameserver:latest
+        env: [{ name: GAME_PORT, value: "30001" }]
+        ports: [{ containerPort: 30001 }]
+        readinessProbe:
+          httpGet: { path: /status, port: 30001 }
+          initialDelaySeconds: 2
+          periodSeconds: 5
 ```
 
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/gameserver-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/gameserver-operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
-## License
-
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+## 8) Daily stop/resume
+- Stop: commit code; optionally `docker stop kind-control-plane`; `wsl --shutdown`; quit Docker Desktop.
+- Resume: start Docker Desktop; open WSL; `docker start kind-control-plane`; `kubectl config use-context kind-kind`; verify operator/pods.
