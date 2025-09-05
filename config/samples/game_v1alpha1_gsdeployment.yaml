@@ -2,6 +2,7 @@ apiVersion: game.example.com/v1alpha1
 kind: GSDeployment
 metadata:
   name: shooter-fleet
+  namespace: games
 spec:
   image: kyon/gameserver:latest
   pollPath: /status
