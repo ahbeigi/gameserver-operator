@@ -168,6 +168,13 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
+              parameters:
+                description: 'NEW: tiny inline knobs (e.g., maxPlayers)'
+                properties:
+                  maxPlayers:
+                    format: int32
+                    type: integer
+                type: object
               pollPath:
                 type: string
               portRange:
@@ -247,6 +254,29 @@ spec:
               scaleUpThresholdPercent:
                 format: int32
                 type: integer
+              updateStrategy:
+                description: 'NEW: rollout policy (simple PoC defaults)'
+                properties:
+                  drainTimeoutSeconds:
+                    description: If a server stays busy, we stop waiting after this
+                      timeout (seconds).
+                    format: int32
+                    type: integer
+                  maxSurge:
+                    description: How many extra servers we can add during rollout
+                      (above MinReplicas).
+                    format: int32
+                    type: integer
+                  maxUnavailable:
+                    description: How many ready servers we can have unavailable during
+                      rollout.
+                    format: int32
+                    type: integer
+                  type:
+                    description: Only "NoDisruption" supported in PoC; leave empty
+                      to default.
+                    type: string
+                type: object
             required:
             - maxReplicas
             - minReplicas

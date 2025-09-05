@@ -10,10 +10,10 @@ import (
 	gamev1alpha1 "github.com/ahbeigi/gameserver-operator/api/v1alpha1"
 
 	corev1 "k8s.io/api/core/v1"
-	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/equality"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"          // << add this
+	"k8s.io/apimachinery/pkg/runtime" // << add this
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -21,7 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
-
 
 //+kubebuilder:rbac:groups=game.example.com,resources=gameservers,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=game.example.com,resources=gameservers/status,verbs=get;update;patch
@@ -57,8 +56,8 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				Labels:    map[string]string{"app": gs.Name, "game.example.com/owner": gs.Name},
 			},
 			Spec: corev1.PodSpec{
-				HostNetwork: true,
-				DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
+				HostNetwork:  true,
+				DNSPolicy:    corev1.DNSClusterFirstWithHostNet,
 				NodeSelector: gs.Spec.NodeSelector,
 				Containers: []corev1.Container{{
 					Name:  "server",
@@ -67,7 +66,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 						Name:  "GAME_PORT",
 						Value: fmt.Sprint(gs.Spec.Port),
 					}),
-					Ports: []corev1.ContainerPort{{ContainerPort: gs.Spec.Port}},
+					Ports:     []corev1.ContainerPort{{ContainerPort: gs.Spec.Port}},
 					Resources: gs.Spec.Resources,
 					ReadinessProbe: &corev1.Probe{
 						ProbeHandler: corev1.ProbeHandler{
@@ -203,6 +202,8 @@ func setOrUpdateCondition(conds *[]metav1.Condition, c metav1.Condition) {
 }
 
 func defaultIfEmpty(s, def string) string {
-	if s == "" { return def }
+	if s == "" {
+		return def
+	}
 	return s
 }
