@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gs-manual
+  namespace: games
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gs-manual
+  template:
+    metadata:
+      labels:
+        app: gs-manual
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: server
+          image: kyon/gameserver:latest
+          env:
+            - name: GAME_PORT
+              value: "30001"
+          ports:
+            - containerPort: 30001
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: 30001
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2

@@ -1,0 +1,50 @@
+apiVersion: game.example.com/v1alpha1
+kind: GSDeployment
+metadata:
+  name: shooter-fleet
+spec:
+  image: kyon/gameserver:latest
+  pollPath: /status
+  portRange: { start: 30000, end: 30005 }
+  minReplicas: 2
+  maxReplicas: 5
+  scaleUpThresholdPercent: 80
+  scaleDownZeroSeconds: 60
+  updateStrategy:
+    type: NoDisruption
+    drainTimeoutSeconds: 7200
+    maxSurge: 2
+    maxUnavailable: 0
+  parameters:
+    maxPlayers: 32
+
+
+# apiVersion: game.example.com/v1alpha1
+# kind: GSDeployment
+# metadata:
+#   name: fleet-a
+#   namespace: games
+# spec:
+#   image: kyon/gameserver:latest
+#   pollPath: /status
+
+#   # fleet bounds
+#   minReplicas: 1
+#   maxReplicas: 5
+
+#   # autoscaling rules
+#   scaleUpThresholdPercent: 80
+#   scaleDownZeroSeconds: 60
+
+#   # host ports to allocate (because hostNetwork=true in the Pod)
+#   portRange:
+#     start: 30000
+#     end: 30010
+
+#   # nodeSelector: { kubernetes.io/os: linux }
+#   # resources:
+#   #   requests: { cpu: "100m", memory: "64Mi" }
+#   #   limits:   { cpu: "500m", memory: "256Mi" }
+#   env:
+#     - name: LOG_LEVEL
+#       value: debug

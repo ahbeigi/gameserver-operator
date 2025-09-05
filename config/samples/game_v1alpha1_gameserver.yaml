@@ -1,0 +1,12 @@
+apiVersion: game.example.com/v1alpha1
+kind: GameServer
+metadata:
+  name: gs-test
+  namespace: games
+spec:
+  image: kyon/gameserver:latest
+  port: 30001
+  pollPath: /status
+  # env: []         # (optional) extra env; GAME_PORT is injected by the controller
+  # resources: {}   # (optional)
+  # nodeSelector: {}# (optional)
